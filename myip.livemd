@@ -2,8 +2,9 @@
 
 ```elixir
 Mix.install([
-  {:req, "~> 0.4.5"},
-  {:floki, "~> 0.35.2"}
+  {:req, "~> 0.3.0"},
+  {:floki, "~> 0.35.2"},
+  {:kino_maplibre, "~> 0.1.10"}
 ])
 ```
 
@@ -22,5 +23,22 @@ ip_address =
 ```
 
 ```elixir
-Req.get!("https://ipinfo.io/#{ip_address}/geo").body
+ip_info = Req.get!("https://ipinfo.io/#{ip_address}/geo").body
+```
+
+```elixir
+coords =
+  ip_info
+  |> Map.get("loc")
+  |> String.split(",")
+  |> Enum.map(fn x ->
+    {value, _} = Float.parse(x)
+    value
+  end)
+  |> Enum.reverse()
+  |> List.to_tuple()
+```
+
+```elixir
+MapLibre.new(style: :street, center: coords, zoom: 10)
 ```
