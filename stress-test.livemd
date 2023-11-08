@@ -1,0 +1,52 @@
+# StressTest
+
+## Section
+
+```elixir
+defmodule StreesTest do
+  def get(url, total_reqs, concurrency) do
+    start_deps()
+
+    req = {url, []}
+    avg_time = do_req(:get, req, total_reqs, concurrency)
+    "Avg response time from #{url} is #{avg_time}[ms]"
+  end
+
+  def post(url, payload, total_reqs, concurrency) do
+    start_deps()
+
+    req = {url, [], ~c"application/json", payload}
+    avg_time = do_req(:post, req, total_reqs, concurrency)
+    "Avg response time from #{url} is #{avg_time}[ms]"
+  end
+
+  defp do_req(method, req, total_reqs, concurrency) do
+    1..total_reqs
+    |> Task.async_stream(
+      fn _ ->
+        start_time = System.monotonic_time()
+        :httpc.request(method, req, [], [])
+        System.monotonic_time() - start_time
+      end,
+      max_concurrency: concurrency
+    )
+    |> Enum.reduce(0, fn {:ok, req_time}, acc -> acc + req_time end)
+    |> System.convert_time_unit(:native, :millisecond)
+    |> Kernel./(total_reqs)
+  end
+
+  def start_deps do
+    Application.ensure_started(:inets)
+    Application.ensure_started(:ssl)
+  end
+end
+```
+
+```elixir
+StreesTest.post(
+  "http://localhost:9292/check",
+  ~c"{\"phone\": \"5555555555\",\"code\": \"226905\"}",
+  10_000,
+  20
+)
+```

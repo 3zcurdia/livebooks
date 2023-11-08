@@ -1,0 +1,113 @@
+# Headlines Analysis
+
+```elixir
+Mix.install(
+  [
+    {:req, "~> 0.4.4"},
+    {:kino_bumblebee, "~> 0.4.0"},
+    {:exla, ">= 0.0.0"}
+  ],
+  config: [nx: [default_backend: EXLA.Backend]]
+)
+```
+
+## Section
+
+```elixir
+defmodule Article do
+  defstruct [
+    :author,
+    :content,
+    :description,
+    :published_at,
+    :source,
+    :title,
+    :url,
+    :url_to_image,
+    :entities,
+    :sentiment
+  ]
+
+  def parse(body) do
+    %Article{
+      author: body["author"],
+      content: body["content"],
+      description: body["description"],
+      published_at: body["publishedAt"],
+      source: get_in(body, ["source", "id"]),
+      title: body["title"],
+      url: body["url"],
+      url_to_image: body["urlToImage"]
+    }
+  end
+end
+```
+
+```elixir
+{:ok, %{status: 200, body: body}} =
+  "https://newsapi.org/v2/top-headlines"
+  |> Req.get(params: %{country: "us", apiKey: System.get_env("LB_NEWS_API_KEY")})
+
+articles =
+  body["articles"]
+  |> Enum.reject(&(&1["content"] == nil))
+  |> Enum.map(&Article.parse/1)
+```
+
+```elixir
+{:ok, model_info} = Bumblebee.load_model({:hf, "dslim/bert-base-NER"})
+{:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "bert-base-cased"})
+
+serving =
+  Bumblebee.Text.token_classification(model_info, tokenizer,
+    aggregation: :same,
+    compile: [batch_size: 1, sequence_length: 128],
+    defn_options: [compiler: EXLA]
+  )
+```
+
+```elixir
+entities = Nx.Serving.run(serving, Enum.map(articles, & &1.title))
+
+articles =
+  articles
+  |> Enum.zip_with(entities, fn article, %{entities: entities} ->
+    %{article | entities: entities}
+  end)
+```
+
+```elixir
+{:ok, model_info} = Bumblebee.load_model({:hf, "ProsusAI/finbert"})
+{:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "bert-base-uncased"})
+
+finbert_serving =
+  Bumblebee.Text.text_classification(model_info, tokenizer,
+    compile: [batch_size: 1, sequence_length: 128],
+    defn_options: [compiler: EXLA]
+  )
+```
+
+```elixir
+predictions = Nx.Serving.run(finbert_serving, Enum.map(articles, & &1.title))
+
+articles =
+  articles
+  |> Enum.zip_with(predictions, fn article, %{predictions: prediction} ->
+    %{label: max_label} = Enum.max_by(prediction, & &1.score)
+    %{article | sentiment: max_label}
+  end)
+```
+
+```elixir
+frame = Kino.Frame.new()
+
+articles
+|> Enum.each(fn article ->
+  Kino.Frame.append(frame, Kino.Bumblebee.HighlightedText.new(article.title, article.entities))
+  Kino.Frame.append(frame, Kino.Text.new(article.sentiment))
+end)
+
+Kino.Layout.grid([frame], boxed: true, gap: 16)
+```
+
+<!-- livebook:{"offset":2483,"stamp":{"token":"XCP.KBuY0o3OZ6LucUzh-trdTa2lWep9M0ySaJjTDJ4xvY5ICjCAHc0N2tbPXpWlLl5BLNHpvvMZrFNGGDOqL1tRFms1cjDkDiaP9JUHydUDkE4Q0OQ9emer","version":2}} -->

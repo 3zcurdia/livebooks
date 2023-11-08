@@ -1,0 +1,26 @@
+# My IP Info
+
+```elixir
+Mix.install([
+  {:req, "~> 0.4.5"},
+  {:floki, "~> 0.35.2"}
+])
+```
+
+## Section
+
+```elixir
+html = Req.get!("http://checkip.dyndns.org").body
+
+ip_address =
+  html
+  |> Floki.parse_document!()
+  |> Floki.find("body")
+  |> Floki.text()
+  |> String.replace("Current IP Address:", "")
+  |> String.trim()
+```
+
+```elixir
+Req.get!("https://ipinfo.io/#{ip_address}/geo").body
+```
