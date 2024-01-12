@@ -1,0 +1,90 @@
+# Entrega iOSLab diplomado
+
+```elixir
+Mix.install([
+  {:req, "~> 0.4.8"},
+  {:req_github_oauth, "~> 0.1.1"},
+  {:kino_explorer, "~> 0.1.11"}
+])
+```
+
+## Section
+
+```elixir
+req = Req.new(http_errors: :raise) |> ReqGitHubOAuth.attach()
+prs = Req.get!(req, url: "https://api.github.com/repos/iOSLabUNAM/SwiftUIBasics/pulls").body
+```
+
+```elixir
+students =
+  prs
+  |> Enum.map(fn x -> x["user"]["url"] end)
+  |> Enum.uniq()
+  |> Task.async_stream(fn url ->
+    res = Req.get!(req, url: url).body
+
+    %{
+      id: res["id"],
+      name: res["name"],
+      username: res["login"],
+      email: res["email"],
+      bio: res["bio"]
+    }
+  end)
+  |> Enum.reduce([], fn {:ok, res}, acc -> [res | acc] end)
+  |> Enum.uniq()
+  |> Enum.filter(fn %{name: name} -> !is_nil(name) end)
+```
+
+```elixir
+valid_prs =
+  prs
+  |> Enum.map(fn x ->
+    %{
+      id: x["number"],
+      user_id: x["user"]["id"],
+      author: nil,
+      body: x["body"],
+      url: String.replace(x["url"], "api.", "")
+    }
+  end)
+  |> Enum.map(fn pr ->
+    student = students |> Enum.find(fn x -> x.id == pr.user_id end)
+
+    if is_nil(student) do
+      pr
+    else
+      %{pr | author: student.name}
+    end
+  end)
+  |> Enum.filter(fn %{body: body} -> !is_nil(body) end)
+```
+
+```elixir
+eval =
+  students
+  |> Enum.map(fn student ->
+    student_prs = Enum.filter(valid_prs, fn pr -> pr.user_id == student.id end)
+
+    prs_row =
+      1..4
+      |> Enum.map(fn pr_num ->
+        student_pr =
+          Enum.find(student_prs, fn %{body: body} -> String.contains?(body, "##{pr_num}") end)
+
+        if is_nil(student_pr) do
+          ""
+        else
+          "#{student_pr.url}"
+        end
+      end)
+      |> Enum.join(",")
+
+    "#{student.name},#{prs_row}"
+  end)
+  |> Enum.join("\n")
+```
+
+```elixir
+Explorer.DataFrame.load_csv!("nombre,#1,#2,#3,#4\n#{eval}")
+```
