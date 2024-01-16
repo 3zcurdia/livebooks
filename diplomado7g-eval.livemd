@@ -11,8 +11,43 @@ Mix.install([
 ## Section
 
 ```elixir
+inputs = [repo: Kino.Input.text("Repository")]
+form = Kino.Control.form(inputs, submit: "Fetch")
+```
+
+```elixir
+repo = "iOSLabUNAM/SwiftUIBasics"
 req = Req.new(http_errors: :raise) |> ReqGitHubOAuth.attach()
-prs = Req.get!(req, url: "https://api.github.com/repos/iOSLabUNAM/SwiftUIBasics/pulls").body
+```
+
+```elixir
+issues =
+  1..4
+  |> Task.async_stream(fn page ->
+    Req.get!(req, url: "https://api.github.com/repos/#{repo}/issues?page=#{page}&per_page=50").body
+  end)
+  |> Stream.map(fn {:ok, res} -> res end)
+  |> Enum.to_list()
+  |> List.flatten()
+  |> Enum.filter(fn iss -> is_nil(iss["closed_at"]) && is_nil(iss["pull_request"]) end)
+  |> Enum.map(fn iss ->
+    %{
+      id: iss["number"],
+      title: iss["title"]
+    }
+  end)
+```
+
+```elixir
+prs =
+  1..4
+  |> Task.async_stream(fn page ->
+    Req.get!(req, url: "https://api.github.com/repos/#{repo}/pulls?page=#{page}&per_page=50").body
+  end)
+  |> Stream.map(fn {:ok, res} -> res end)
+  |> Enum.to_list()
+  |> List.flatten()
+  |> Enum.filter(fn pr -> is_nil(pr["closed_at"]) end)
 ```
 
 ```elixir
@@ -67,15 +102,17 @@ eval =
     student_prs = Enum.filter(valid_prs, fn pr -> pr.user_id == student.id end)
 
     prs_row =
-      1..4
-      |> Enum.map(fn pr_num ->
+      issues
+      |> Enum.map(fn issue ->
         student_pr =
-          Enum.find(student_prs, fn %{body: body} -> String.contains?(body, "##{pr_num}") end)
+          Enum.find(student_prs, fn %{body: body} -> String.contains?(body, "##{issue.id}") end)
 
         if is_nil(student_pr) do
           ""
         else
-          "#{student_pr.url}"
+          student_pr.url
+          |> String.replace("/repos/", "/")
+          |> String.replace("/pulls/", "/pull/")
         end
       end)
       |> Enum.join(",")
@@ -86,5 +123,10 @@ eval =
 ```
 
 ```elixir
-Explorer.DataFrame.load_csv!("nombre,#1,#2,#3,#4\n#{eval}")
+issues_head =
+  issues
+  |> Enum.map(fn %{id: id} -> "##{id}" end)
+  |> Enum.join(",")
+
+Explorer.DataFrame.load_csv!("nombre,#{issues_head}\n#{eval}")
 ```
