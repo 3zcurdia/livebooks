@@ -11,11 +11,6 @@ Mix.install([
 ## Section
 
 ```elixir
-inputs = [repo: Kino.Input.text("Repository")]
-form = Kino.Control.form(inputs, submit: "Fetch")
-```
-
-```elixir
 repo = "iOSLabUNAM/SwiftUIBasics"
 req = Req.new(http_errors: :raise) |> ReqGitHubOAuth.attach()
 ```
@@ -80,9 +75,13 @@ valid_prs =
       user_id: x["user"]["id"],
       author: nil,
       body: x["body"],
-      url: String.replace(x["url"], "api.", "")
+      url: x["url"],
+      html_url: x["html_url"],
+      issue_url: x["issue_url"],
+      timeline_url: "#{x["issue_url"]}/timeline"
     }
   end)
+  |> Enum.filter(fn %{body: body} -> !is_nil(body) end)
   |> Enum.map(fn pr ->
     student = students |> Enum.find(fn x -> x.id == pr.user_id end)
 
@@ -92,7 +91,30 @@ valid_prs =
       %{pr | author: student.name}
     end
   end)
-  |> Enum.filter(fn %{body: body} -> !is_nil(body) end)
+```
+
+```elixir
+review = fn timeline_url ->
+  review_comments = Req.get!(req, url: timeline_url).body
+
+  evals =
+    review_comments
+    |> Stream.filter(fn %{"event" => event} -> event == "reviewed" end)
+    |> Stream.filter(fn %{"author_association" => author} -> author == "MEMBER" end)
+    |> Stream.map(fn rev -> rev["body"] end)
+    |> Stream.filter(fn body -> String.contains?(body, "LGTM") end)
+    |> Enum.map(fn body ->
+      [{val, _rem} | _] =
+        ~r/[(\d)]/
+        |> Regex.scan(body)
+        |> List.flatten()
+        |> Enum.map(&Integer.parse/1)
+
+      val
+    end)
+
+  if length(evals) > 0, do: hd(evals), else: nil
+end
 ```
 
 ```elixir
@@ -101,32 +123,27 @@ eval =
   |> Enum.map(fn student ->
     student_prs = Enum.filter(valid_prs, fn pr -> pr.user_id == student.id end)
 
-    prs_row =
+    student_issues =
       issues
-      |> Enum.map(fn issue ->
-        student_pr =
-          Enum.find(student_prs, fn %{body: body} -> String.contains?(body, "##{issue.id}") end)
+      |> Enum.reduce([], fn issue, pr_list ->
+        pr =
+          Enum.find(student_prs, %{}, fn %{body: body} ->
+            String.contains?(body, "##{issue.id}")
+          end)
 
-        if is_nil(student_pr) do
-          ""
-        else
-          student_pr.url
-          |> String.replace("/repos/", "/")
-          |> String.replace("/pulls/", "/pull/")
-        end
+        timeline = Map.get(pr, :timeline_url)
+        review = if is_nil(timeline), do: nil, else: review.(timeline)
+
+        [
+          %{
+            issue: issue.id,
+            url: Map.get(pr, :html_url),
+            review: review
+          }
+          | pr_list
+        ]
       end)
-      |> Enum.join(",")
 
-    "#{student.name},#{prs_row}"
+    Map.put(student, :pull_requests, student_issues)
   end)
-  |> Enum.join("\n")
-```
-
-```elixir
-issues_head =
-  issues
-  |> Enum.map(fn %{id: id} -> "##{id}" end)
-  |> Enum.join(",")
-
-Explorer.DataFrame.load_csv!("nombre,#{issues_head}\n#{eval}")
 ```
