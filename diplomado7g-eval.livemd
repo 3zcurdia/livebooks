@@ -36,8 +36,6 @@ defmodule GHUser do
     parse(body)
   end
 end
-
-GHUser.fetch(req, "3zcurdia")
 ```
 
 ```elixir
@@ -146,4 +144,15 @@ end
 
 pulls = PullRequest.load_all(req, repo)
 evaluated = PullRequest.fetch_reviews(req, pulls)
+```
+
+```elixir
+students =
+  evaluated
+  |> Enum.map(fn %{username: username} -> username end)
+  |> Enum.uniq()
+  |> Task.async_stream(&GHUser.fetch(req, &1))
+  |> Stream.map(fn {:ok, res} -> res end)
+  |> Enum.to_list()
+  |> List.flatten()
 ```
