@@ -16,134 +16,134 @@ req = Req.new(http_errors: :raise) |> ReqGitHubOAuth.attach()
 ```
 
 ```elixir
-issues =
-  1..4
-  |> Task.async_stream(fn page ->
-    Req.get!(req, url: "https://api.github.com/repos/#{repo}/issues?page=#{page}&per_page=50").body
-  end)
-  |> Stream.map(fn {:ok, res} -> res end)
-  |> Enum.to_list()
-  |> List.flatten()
-  |> Enum.filter(fn iss -> is_nil(iss["closed_at"]) && is_nil(iss["pull_request"]) end)
-  |> Enum.map(fn iss ->
-    %{
+defmodule GHUser do
+  defstruct(id: nil, name: nil, username: nil, email: nil, bio: nil, url: nil)
+
+  def parse(usr) do
+    %GHUser{
+      id: usr["id"],
+      name: usr["name"],
+      username: usr["login"],
+      email: usr["email"],
+      bio: usr["bio"],
+      url: usr["url"]
+    }
+  end
+
+  def fetch(req, username) do
+    body = Req.get!(req, url: "https://api.github.com/users/#{username}").body
+
+    parse(body)
+  end
+end
+
+GHUser.fetch(req, "3zcurdia")
+```
+
+```elixir
+defmodule Issue do
+  defstruct id: nil, title: nil
+
+  def parse(iss) do
+    %Issue{
       id: iss["number"],
       title: iss["title"]
     }
-  end)
+  end
+
+  def load_all(req, repo, max_page \\ 8) do
+    1..max_page
+    |> Task.async_stream(fn page ->
+      Req.get!(req, url: "https://api.github.com/repos/#{repo}/issues?page=#{page}&per_page=50").body
+    end)
+    |> Stream.map(fn {:ok, res} -> res end)
+    |> Enum.to_list()
+    |> List.flatten()
+    |> Enum.filter(fn iss -> is_nil(iss["closed_at"]) && is_nil(iss["pull_request"]) end)
+    |> Enum.map(&parse/1)
+  end
+end
+
+issues = Issue.load_all(req, repo)
 ```
 
 ```elixir
-prs =
-  1..4
-  |> Task.async_stream(fn page ->
-    Req.get!(req, url: "https://api.github.com/repos/#{repo}/pulls?page=#{page}&per_page=50").body
-  end)
-  |> Stream.map(fn {:ok, res} -> res end)
-  |> Enum.to_list()
-  |> List.flatten()
-  |> Enum.filter(fn pr -> is_nil(pr["closed_at"]) end)
-```
+defmodule PullRequest do
+  defstruct(
+    number: nil,
+    username: nil,
+    body: nil,
+    url: nil,
+    html_url: nil,
+    timeline_url: nil,
+    review: nil,
+    evaluation: 0
+  )
 
-```elixir
-students =
-  prs
-  |> Enum.map(fn x -> x["user"]["url"] end)
-  |> Enum.uniq()
-  |> Task.async_stream(fn url ->
-    res = Req.get!(req, url: url).body
-
-    %{
-      id: res["id"],
-      name: res["name"],
-      username: res["login"],
-      email: res["email"],
-      bio: res["bio"]
+  def parse(pr) do
+    %PullRequest{
+      number: pr["number"],
+      username: pr["user"]["login"],
+      body: pr["body"],
+      url: pr["url"],
+      html_url: pr["html_url"],
+      timeline_url: "#{pr["issue_url"]}/timeline"
     }
-  end)
-  |> Enum.reduce([], fn {:ok, res}, acc -> [res | acc] end)
-  |> Enum.uniq()
-  |> Enum.filter(fn %{name: name} -> !is_nil(name) end)
-```
+  end
 
-```elixir
-valid_prs =
-  prs
-  |> Enum.map(fn x ->
-    %{
-      id: x["number"],
-      user_id: x["user"]["id"],
-      author: nil,
-      body: x["body"],
-      url: x["url"],
-      html_url: x["html_url"],
-      issue_url: x["issue_url"],
-      timeline_url: "#{x["issue_url"]}/timeline"
-    }
-  end)
-  |> Enum.filter(fn %{body: body} -> !is_nil(body) end)
-  |> Enum.map(fn pr ->
-    student = students |> Enum.find(fn x -> x.id == pr.user_id end)
+  def load_all(req, repo, max_page \\ 8) do
+    1..max_page
+    |> Task.async_stream(
+      fn page ->
+        Req.get!(req, url: "https://api.github.com/repos/#{repo}/pulls?page=#{page}&per_page=50").body
+      end,
+      max_concurrency: 8
+    )
+    |> Stream.map(fn {:ok, res} -> res end)
+    |> Enum.to_list()
+    |> List.flatten()
+    |> Enum.filter(fn pr -> is_nil(pr["closed_at"]) || !is_nil(pr["body"]) end)
+    |> Enum.map(&PullRequest.parse/1)
+  end
 
-    if is_nil(student) do
-      pr
-    else
-      %{pr | author: student.name}
-    end
-  end)
-```
+  def fetch_reviews(req, pull_requests) do
+    pull_requests
+    |> Task.async_stream(&fetch_review(req, &1), max_concurrency: 8)
+    |> Enum.map(fn {:ok, res} -> res end)
+  end
 
-```elixir
-review = fn timeline_url ->
-  review_comments = Req.get!(req, url: timeline_url).body
+  def fetch_review(req, %PullRequest{timeline_url: timeline_url} = pr) do
+    comments = Req.get!(req, url: timeline_url).body
 
-  evals =
-    review_comments
-    |> Stream.filter(fn %{"event" => event} -> event == "reviewed" end)
-    |> Stream.filter(fn %{"author_association" => author} -> author == "MEMBER" end)
-    |> Stream.map(fn rev -> rev["body"] end)
-    |> Stream.filter(fn body -> String.contains?(body, "LGTM") end)
-    |> Enum.map(fn body ->
-      [{val, _rem} | _] =
-        ~r/[(\d)]/
-        |> Regex.scan(body)
+    review =
+      comments
+      |> Stream.filter(fn %{"event" => event} -> event == "reviewed" end)
+      |> Stream.filter(fn %{"author_association" => author} -> author == "MEMBER" end)
+      |> Enum.map(fn rev -> rev["body"] || "" end)
+      |> Enum.join("\n")
+      |> String.trim()
+
+    pr
+    |> Map.put(:review, review)
+    |> parse_evaluation()
+  end
+
+  defp parse_evaluation(%PullRequest{review: review} = pr) do
+    if String.contains?(review, "LGTM") do
+      [{eval, _rem} | _] =
+        ~r/\[(\d+)\]/
+        |> Regex.scan(review)
         |> List.flatten()
+        |> tl()
         |> Enum.map(&Integer.parse/1)
 
-      val
-    end)
-
-  if length(evals) > 0, do: hd(evals), else: nil
+      %PullRequest{pr | evaluation: eval}
+    else
+      pr
+    end
+  end
 end
-```
 
-```elixir
-eval =
-  students
-  |> Enum.map(fn student ->
-    student_prs = Enum.filter(valid_prs, fn pr -> pr.user_id == student.id end)
-
-    student_issues =
-      issues
-      |> Enum.reduce([], fn issue, pr_list ->
-        pr =
-          Enum.find(student_prs, %{}, fn %{body: body} ->
-            String.contains?(body, "##{issue.id}")
-          end)
-
-        timeline = Map.get(pr, :timeline_url)
-        review = if is_nil(timeline), do: nil, else: review.(timeline)
-
-        [
-          %{
-            issue: issue.id,
-            url: Map.get(pr, :html_url),
-            review: review
-          }
-          | pr_list
-        ]
-      end)
-
-    Map.put(student, :pull_requests, student_issues)
-  end)
+pulls = PullRequest.load_all(req, repo)
+evaluated = PullRequest.fetch_reviews(req, pulls)
 ```
