@@ -17,7 +17,7 @@ req = Req.new(http_errors: :raise) |> ReqGitHubOAuth.attach()
 
 ```elixir
 defmodule GHUser do
-  defstruct(id: nil, name: nil, username: nil, email: nil, bio: nil, url: nil)
+  defstruct(id: nil, name: nil, username: nil, email: nil, bio: nil, url: nil, evaluations: %{})
 
   def parse(usr) do
     %GHUser{
@@ -141,7 +141,9 @@ defmodule PullRequest do
     end
   end
 end
+```
 
+```elixir
 pulls = PullRequest.load_all(req, repo)
 evaluated = PullRequest.fetch_reviews(req, pulls)
 ```
@@ -155,4 +157,55 @@ students =
   |> Stream.map(fn {:ok, res} -> res end)
   |> Enum.to_list()
   |> List.flatten()
+```
+
+```elixir
+evaluation_map =
+  students
+  |> Enum.map(fn student ->
+    student_prs =
+      evaluated |> Enum.filter(fn %{username: username} -> username == student.username end)
+
+    evals =
+      issues
+      |> Enum.map(fn iss ->
+        {
+          iss.id,
+          Enum.find(student_prs, fn %{body: body} ->
+            String.contains?(body || "", "##{iss.id}")
+          end)
+        }
+      end)
+      |> Map.new()
+
+    %GHUser{student | evaluations: evals}
+  end)
+```
+
+```elixir
+csv =
+  evaluation_map
+  |> Enum.map(fn student ->
+    res =
+      student
+      |> Map.get(:evaluations)
+      |> Enum.map(fn {_iss_id, pr} ->
+        if is_nil(pr) do
+          ""
+        else
+          "#{pr.evaluation || pr.html_url}"
+        end
+      end)
+      |> Enum.join(",")
+
+    "#{student.name || student.username},#{res}"
+  end)
+  |> Enum.join("\n")
+
+hd_issues =
+  issues
+  |> Enum.map(&"##{&1.id}")
+  |> Enum.join(",")
+
+Explorer.DataFrame.load_csv!("name,#{hd_issues}\n#{csv}")
 ```
