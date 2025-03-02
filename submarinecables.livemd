@@ -1,0 +1,53 @@
+# Subsea cable map
+
+```elixir
+Mix.install([
+  {:req, "~> 0.5.8"}
+])
+```
+
+## Section
+
+```elixir
+search = Req.get!("https://www.submarinecablemap.com/api/v3/search.json").body
+```
+
+```elixir
+cable_ids =
+  search
+  |> Enum.reduce(MapSet.new(), fn %{"url" => url}, acc ->
+    paths = url |> String.split("/")
+      if Enum.at(paths, 1) == "submarine-cable" do
+         MapSet.put(acc, Enum.at(paths, 2))
+      else
+        acc
+      end
+  end)
+  |> Enum.to_list()
+  |> Enum.sort()
+```
+
+```elixir
+cables = 
+  cable_ids
+  |> Task.async_stream(fn cid -> 
+    Req.get!("https://www.submarinecablemap.com/api/v3/cable/#{cid}.json").body
+  end)
+  |> Enum.map(fn {:ok, result} -> result end)
+```
+
+```elixir
+cables_geo = Req.get!("https://www.submarinecablemap.com/api/v3/cable/cable-geo.json").body
+```
+
+```elixir
+cables_geo |> Map.get("features") |> hd()
+```
+
+```elixir
+landin_points = Req.get!("https://www.submarinecablemap.com/api/v3/landing-point/landing-point-geo.json").body
+```
+
+```elixir
+landin_points |> Map.get("features") |> hd()
+```
