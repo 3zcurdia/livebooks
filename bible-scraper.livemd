@@ -1,0 +1,290 @@
+# Bible Scrap
+
+```elixir
+Mix.install([
+  {:req, "~> 0.5.16"},
+  {:floki, "~> 0.38.0"}
+])
+```
+
+## Section
+
+```elixir
+html = Req.get!("https://www.biblegateway.com/passage/?search=genesis+1&version=NRSVUE").body
+```
+
+```elixir
+doc = Floki.parse_document!(html)
+
+passage = Floki.find(doc, ".passage-content")
+titles = Floki.find(passage, "h3") |> Floki.text()
+```
+
+```elixir
+defmodule CrossrefScraper do
+  @moduledoc """
+  Scrapes <li> elements structured as Floki-like tuples into a map of id => list of Bible refs.
+  """
+
+  def scrape(li_nodes) when is_list(li_nodes) do
+    li_nodes
+    |> Enum.reduce(%{}, fn
+      {"li", attrs, children}, acc ->
+        id = get_attr(attrs, "id")
+
+        data_bibleref =
+          children
+          |> find_crossref_data_bibleref()
+
+        case {id, data_bibleref} do
+          {nil, _} -> acc
+          {_, nil} -> acc
+          {id, refs} ->
+            Map.put(acc, id, split_refs(refs))
+        end
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp get_attr(attrs, key), do: attrs |> Enum.find_value(fn {k, v} -> if k == key, do: v end)
+
+
+  defp find_crossref_data_bibleref(nodes) do
+    Enum.find_value(nodes, fn
+      {"a", attrs, _children} ->
+        if get_attr(attrs, "class") == "crossref-link" do
+          get_attr(attrs, "data-bibleref")
+        end
+
+      {_, _, children} when is_list(children) ->
+        find_crossref_data_bibleref(children)
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp split_refs(nil), do: []
+  defp split_refs(str) do
+    str
+    |> String.split(~r/,\s*/)
+    |> Enum.map(&String.trim/1)
+  end
+end
+```
+
+```elixir
+defmodule FootnoteScraper do
+  @moduledoc """
+  Scrapes <li> elements containing <span class="footnote-text"> into a map of id => text.
+  """
+
+  def scrape(li_nodes) when is_list(li_nodes) do
+    Enum.reduce(li_nodes, %{}, fn
+      {"li", attrs, children}, acc ->
+        id = get_attr(attrs, "id")
+        footnote_text = find_footnote_text(children)
+
+        case {id, footnote_text} do
+          {nil, _} -> acc
+          {_, nil} -> acc
+          {id, text} -> Map.put(acc, id, normalize_text(text))
+        end
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  # Extract attribute from tag attrs
+  defp get_attr(attrs, key), do: attrs |> Enum.find_value(fn {k, v} -> if k == key, do: v end)
+
+  # Recursively find <span class="footnote-text">
+  defp find_footnote_text(nodes) do
+    Enum.find_value(nodes, fn
+      {"span", attrs, children} ->
+        if get_attr(attrs, "class") == "footnote-text" do
+          flatten_text(children)
+        end
+
+      {_, _, children} when is_list(children) ->
+        find_footnote_text(children)
+
+      _ ->
+        nil
+    end)
+  end
+
+  # Recursively flatten nested tags into plain text
+  defp flatten_text(nodes) when is_list(nodes) do
+    nodes
+    |> Enum.map(fn
+      binary when is_binary(binary) -> binary
+      {_, _, children} -> flatten_text(children)
+      _ -> ""
+    end)
+    |> Enum.join()
+  end
+
+  defp flatten_text(_), do: ""
+
+  # Normalize whitespace and trim
+  defp normalize_text(text) do
+    text
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+end
+
+```
+
+```elixir
+crossrefs = passage
+|> Floki.find("div.crossrefs ol li")
+|> CrossrefScraper.scrape()
+```
+
+```elixir
+footnotes = passage
+|> Floki.find("div.footnotes ol li")
+|> FootnoteScraper.scrape()
+```
+
+```elixir
+defmodule VerseScraper do
+  @moduledoc """
+  Scrapes a verse span into structured content segments:
+  [
+    %{text: "...", footnotes: ["..."], crossrefs: ["..."]}
+  ]
+  """
+
+  defstruct [:verse, :content]
+
+  def scrape({"span", _attrs, children} = span) do
+    %__MODULE__{
+      verse: parse_num(span),
+      content: parse_content(children)
+    }
+  end
+
+  def parse_num(span) do
+    span
+      |> Floki.find(".versenum")
+      |> Floki.text()
+      |> String.trim()
+    |> case do
+      "" -> 1
+      txt ->
+        txt
+        |> String.replace(~r/[^\d]/, "")
+        |> case do
+          "" -> 1
+          num -> String.to_integer(num)
+        end
+    end
+  end
+
+  defp parse_content(nodes) do
+    nodes
+    |> do_parse([])
+    |> Enum.map(&normalize_segment/1)
+    |> Enum.reverse()
+  end
+
+  defp do_parse([], acc), do: Enum.reverse(acc)
+
+  defp do_parse([node | rest], acc) do
+    cond do
+      is_binary(node) ->
+        # text node
+        text = clean_text(node)
+        segment = %{text: text, footnotes: [], crossrefs: []}
+        do_parse(rest, add_segment(acc, segment))
+
+      match?({"span", [{"class", "chapternum"} | _], _}, node) ->
+        # skip chapter number
+        do_parse(rest, acc)
+
+      match?({"sup", _, _}, node) ->
+        do_parse(rest, handle_sup(node, acc))
+
+      match?({_, _, _}, node) ->
+        {_, _, children} = node
+        do_parse(children ++ rest, acc)
+
+      true ->
+        do_parse(rest, acc)
+    end
+  end
+
+  defp handle_sup({"sup", _attrs, _}, []), do: [] 
+
+  defp handle_sup({"sup", attrs, _}, acc) do
+    cond do
+      fn_id = get_attr(attrs, "data-fn") ->
+        attach_to_last(acc, :footnotes, strip_ref(fn_id))
+
+      cr_id = get_attr(attrs, "data-cr") ->
+        attach_to_last(acc, :crossrefs, strip_ref(cr_id))
+
+      true ->
+        acc
+    end
+  end
+
+  defp attach_to_last(acc, key, id) do
+    List.update_at(acc, -1, fn seg ->
+      Map.update(seg, key, [id], fn lst -> lst ++ [id] end)
+    end)
+  end
+
+  defp add_segment([], seg), do: [seg]
+
+  defp add_segment(acc, %{text: ""}), do: acc
+
+  defp add_segment([last | rest], %{text: text} = seg) do
+    if String.trim(text) == "" do
+      [last | rest]
+    else
+      [seg | [last | rest]]
+    end
+    |> Enum.reverse()
+  end
+
+  # ensure text is trimmed and single spaces
+  defp normalize_segment(%{text: t} = seg),
+    do: %{seg | text: String.trim(t)}
+
+  defp get_attr(attrs, key),
+    do: Enum.find_value(attrs, fn {k, v} -> if k == key, do: v end)
+
+  defp strip_ref("#" <> id), do: id
+  defp strip_ref(id), do: id
+
+  defp clean_text(txt),
+    do: txt |> String.replace("\u00A0", " ") |> String.replace(~r/\s+/, " ")
+end
+
+```
+
+```elixir
+# [span|span_passages] = passage |> Floki.find("p>span.text")
+# VerseScraper.scrape(span)
+verses = 
+  passage
+  |> Floki.find("p span.text")
+  |> Enum.map(&VerseScraper.scrape/1)
+  |> Enum.map(fn verse ->
+    new_content = verse.content
+      |> Enum.map(fn content ->
+        content
+        |> Map.put(:crossrefs, Enum.flat_map(content.crossrefs, fn key -> crossrefs[key] end))
+        |> Map.put(:footnotes, Enum.map(content.footnotes, fn key -> footnotes[key] end))
+      end)
+    Map.put(verse, :content, new_content)
+  end)
+
+```

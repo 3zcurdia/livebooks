@@ -1,0 +1,46 @@
+# Benchmark
+
+```elixir
+Mix.install([
+  {:benchee, "~> 1.3"},
+  {:ecto, "~> 3.12"},
+  {:kino_benchee, "~> 0.1.0"}
+])
+```
+
+## Section
+
+```elixir
+defmodule Benchmark do
+  # defp crypto_id do
+  #   :crypto.strong_rand_bytes(8) |> Base.encode16()
+  # end
+
+  # defp ecto_uuid do: Ecto.UUID.generate()
+
+  def sha256(content), do: :sha256 |> :crypto.hash(content) |> Base.encode16(case: :lower)
+  def crc32(content) do
+    crc = :erlang.crc32(content)
+    size = byte_size(content)
+    "#{crc}-#{size}"
+  end
+  @text "Lorem ipsum dolor sit amet, consectetur adipiscing elit. In mollis et neque eu semper. Nunc vehicula vel mauris nec vestibulum. Sed tincidunt congue dui, sed convallis sem sodales ac. Duis pellentesque gravida quam, ut dapibus enim. Etiam placerat diam dolor, ac vestibulum lorem consectetur viverra. Aenean non cursus dolor. In hac habitasse platea dictumst. Orci varius natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus."
+
+  def run do
+    Benchee.run(%{
+      "sha256" => fn -> sha256(@text) end,
+      "crc32" => fn -> crc32(@text) end
+    },
+    warmup: 2,
+    time: 10,
+    memory_time: 2,
+    reduction_time: 2,
+    profile_after: true
+    )
+  end
+end
+```
+
+```elixir
+Benchmark.run()
+```
