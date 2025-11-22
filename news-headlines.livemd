@@ -110,4 +110,4 @@ end)
 Kino.Layout.grid([frame], boxed: true, gap: 16)
 ```
 
-<!-- livebook:{"offset":2483,"stamp":{"token":"XCP.KBuY0o3OZ6LucUzh-trdTa2lWep9M0ySaJjTDJ4xvY5ICjCAHc0N2tbPXpWlLl5BLNHpvvMZrFNGGDOqL1tRFms1cjDkDiaP9JUHydUDkE4Q0OQ9emer","version":2}} -->
+<!-- livebook:{"offset":2483,"stamp":{"token":"XCP.eTLeFfLwY5CWf05ARfZOxVcZpfxu_BDBsr2Yq610KqwxU-wlpYxUDFWPLkMyvvVkma88zjZZK6XoXp7GyOCmNRHSt0P0t1R3_h0jqSrSPhxiRmnOof4u","version":2}} -->

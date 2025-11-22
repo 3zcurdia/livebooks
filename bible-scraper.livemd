@@ -161,10 +161,8 @@ defmodule VerseScraper do
   ]
   """
 
-  defstruct [:verse, :content]
-
   def scrape({"span", _attrs, children} = span) do
-    %__MODULE__{
+    %{
       verse: parse_num(span),
       content: parse_content(children)
     }
